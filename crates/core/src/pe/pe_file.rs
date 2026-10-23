@@ -354,9 +354,12 @@ impl PeFile {
             let raw_len = sec.size_of_raw_data as usize;
             let aligned_len =
                 reader::align_up(raw_len as u64, optional.file_alignment as u64) as usize;
+            // C# `Array.Copy` throws (and the parse fails) when a section claims
+            // more raw data than the file actually holds. Mirror that here
+            // instead of silently zero-filling, which would emit corrupt output.
             let raw = data
                 .rd_bytes(sec.pointer_to_raw_data as usize, raw_len)
-                .unwrap_or_default()
+                .ok_or_else(|| Error::InvalidPe("section raw data extends past EOF".into()))?
                 .to_vec();
             let mut aligned = raw;
             aligned.resize(aligned_len, 0);

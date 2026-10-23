@@ -72,8 +72,8 @@ impl Variant10 {
         let header_size = bind_data.rd_u32(offset + 13).ok_or(Error::OutOfBounds)? as usize * 4;
 
         // Calculate the file offset from the pointer.
-        let file_offset =
-            pe.get_file_offset_from_rva(header_pointer as u64 - pe.optional.image_base);
+        let file_offset = pe
+            .get_file_offset_from_rva((header_pointer as u64).wrapping_sub(pe.optional.image_base));
 
         // Read and decrypt the header data.
         let mut header_data = common::read_range(pe, file_offset, header_size)?;
@@ -83,7 +83,7 @@ impl Variant10 {
 
         // Validate the header via the unpacker function matching the file entry point.
         let bind_function = header_data.rd_u32(8).ok_or(Error::OutOfBounds)?;
-        if bind_function as u64 - pe.optional.image_base
+        if (bind_function as u64).wrapping_sub(pe.optional.image_base)
             != pe.optional.address_of_entry_point as u64
         {
             return Err(Error::Unpack(

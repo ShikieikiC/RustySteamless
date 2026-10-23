@@ -176,7 +176,7 @@ impl Variant20 {
             // Looks for: mov reg, immediate
             if let Some(imm) = is_mov_reg_imm(&insn) {
                 if struct_offset == 0 {
-                    struct_offset = imm - pe.optional.image_base;
+                    struct_offset = imm.wrapping_sub(pe.optional.image_base);
                     continue;
                 }
             }

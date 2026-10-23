@@ -271,7 +271,7 @@ impl Variant21 {
         let offsets = if options.use_experimental_features {
             get_drmp_offsets_dynamic(block)
         } else {
-            get_drmp_offsets(block, use_fallback)
+            get_drmp_offsets(block, use_fallback)?
         };
         if offsets.len() != 8 {
             return Err(Error::Unpack(
@@ -389,17 +389,19 @@ fn payload_get(data: &[u8], offset: u32, len: usize) -> Result<&[u8]> {
 }
 
 /// Reads a little-endian u32 from `data` at `offset`.
+///
+/// Returns 0 for out-of-range reads so the surrounding logic degrades the same
+/// way the C# `BitConverter` + `Skip/Take` sequence does (it yields a short
+/// array which surfaces later as a failed step rather than a panic).
 fn payload_u32(data: &[u8], offset: u32) -> u32 {
-    u32::from_le_bytes(
-        data.get(offset as usize..offset as usize + 4)
-            .map(|b| [b[0], b[1], b[2], b[3]])
-            .unwrap_or([0; 4]),
-    )
+    data.get(offset as usize..offset as usize + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .unwrap_or(0)
 }
 
 /// Extracts the SteamDRMP.dll offsets using the fixed positions in the offset
 /// block (mirrors `GetSteamDrmpOffsets`).
-fn get_drmp_offsets(data: &[u8], fallback: bool) -> Vec<i32> {
+fn get_drmp_offsets(data: &[u8], fallback: bool) -> Result<Vec<i32>> {
     let offset0 = 2; // Flags
     let offset1 = 14; // Steam App Id
     let offset2 = if fallback { 25 } else { 26 }; // OEP
@@ -408,20 +410,25 @@ fn get_drmp_offsets(data: &[u8], fallback: bool) -> Vec<i32> {
     let offset5 = if fallback { 61 } else { 62 }; // Code Section AES Key
     let offset6 = if fallback { 72 } else { 67 }; // Code Section AES Iv
 
+    let read = |offset: usize| -> Result<i32> {
+        let bytes = data.get(offset..offset + 4).ok_or(Error::OutOfBounds)?;
+        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    };
+
     let mut offsets = vec![
-        i32::from_le_bytes(data[offset0..offset0 + 4].try_into().unwrap()), // 0 - Flags
-        i32::from_le_bytes(data[offset1..offset1 + 4].try_into().unwrap()), // 1 - Steam App Id
-        i32::from_le_bytes(data[offset2..offset2 + 4].try_into().unwrap()), // 2 - OEP
-        i32::from_le_bytes(data[offset3..offset3 + 4].try_into().unwrap()), // 3 - Code Section Virtual Address
-        i32::from_le_bytes(data[offset4..offset4 + 4].try_into().unwrap()), // 4 - Code Section Virtual Size (Encrypted Size)
-        i32::from_le_bytes(data[offset5..offset5 + 4].try_into().unwrap()), // 5 - Code Section AES Key
+        read(offset0)?, // 0 - Flags
+        read(offset1)?, // 1 - Steam App Id
+        read(offset2)?, // 2 - OEP
+        read(offset3)?, // 3 - Code Section Virtual Address
+        read(offset4)?, // 4 - Code Section Virtual Size (Encrypted Size)
+        read(offset5)?, // 5 - Code Section AES Key
     ];
 
-    let aes_iv_offset = i32::from_le_bytes(data[offset6..offset6 + 4].try_into().unwrap());
+    let aes_iv_offset = read(offset6)?;
     offsets.push(aes_iv_offset); // 6 - Code Section AES Iv
-    offsets.push(aes_iv_offset + 16); // 7 - Code Section Stolen Bytes
+    offsets.push(aes_iv_offset.wrapping_add(16)); // 7 - Code Section Stolen Bytes
 
-    offsets
+    Ok(offsets)
 }
 
 /// Extracts the SteamDRMP.dll offsets dynamically by disassembling the offset
@@ -494,7 +501,7 @@ mod tests {
         data[62..66].fill(0xAB);
         data[67..71].copy_from_slice(&0x100u32.to_le_bytes());
 
-        let offsets = get_drmp_offsets(&data, false);
+        let offsets = get_drmp_offsets(&data, false).unwrap();
         assert_eq!(offsets.len(), 8);
         assert_eq!(offsets[0], 1);
         assert_eq!(offsets[1], 730);

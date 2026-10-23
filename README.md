@@ -5,24 +5,13 @@ It removes SteamStub DRM from executable files, so they can be analyzed and modi
 
 Rusty-Steamless ships as a Tauri app plus a CLI version for automatable or scripted use.
 
-## Install
+## Build
 
-Grab the packager for your platform from the [latest release](https://github.com/notwinterdust/RustySteamless/releases/latest):
+```
+cargo build --release
+```
 
-| Platform | Package | Link |
-|---|---|---|
-| Windows | `rusty-steamless-windows-x86.exe` (GUI) | [Download](https://github.com/notwinterdust/RustySteamless/releases/download/v0.1.0/rusty-steamless-windows-x86.exe) |
-| macOS | `rusty-steamless-macos-arm64.dmg` (GUI) | [Download](https://github.com/notwinterdust/RustySteamless/releases/download/v0.1.0/rusty-steamless-macos-arm64.dmg) |
-| Linux | `rusty-steamless-linux-x86.AppImage` (GUI) | [Download](https://github.com/notwinterdust/RustySteamless/releases/download/v0.1.0/rusty-steamless-linux-x86.AppImage) |
-
-Need a bare binary instead of the GUI? Use the matching `rusty-steamless-cli-*` asset:
-
-| Platform | CLI binary |
-|---|---|
-| Windows | [rusty-steamless-cli-windows-x86.exe](https://github.com/notwinterdust/RustySteamless/releases/download/v0.1.0/rusty-steamless-cli-windows-x86.exe) |
-| macOS | [rusty-steamless-cli-macos-arm64](https://github.com/notwinterdust/RustySteamless/releases/download/v0.1.0/rusty-steamless-cli-macos-arm64) |
-| Linux x86 | [rusty-steamless-cli-linux-x86](https://github.com/notwinterdust/RustySteamless/releases/download/v0.1.0/rusty-steamless-cli-linux-x86) |
-| Linux arm64 | [rusty-steamless-cli-linux-arm64](https://github.com/notwinterdust/RustySteamless/releases/download/v0.1.0/rusty-steamless-cli-linux-arm64) |
+The CLI binary is produced at `target/release/rusty-steamless`. The Tauri GUI builds from `app/` with `npm install && npm run tauri build`.
 
 ## CLI usage
 

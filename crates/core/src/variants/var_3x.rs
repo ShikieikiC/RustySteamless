@@ -109,15 +109,17 @@ fn parse_header(data: &[u8], variant: Variant) -> Result<Var3xHeader> {
             code_section_virtual_address: rd_u32(data, 64)? as u64,
             code_section_raw_size: rd_u32(data, 68)? as u64,
             aes_key: read_array(data, 72)?,
-            aes_iv: read_array(data, 120)?,
-            code_section_stolen_data: read_array(data, 136)?,
+            // SteamStub32Var30Header: AES_Key[0x20] @72, AES_IV[0x10] @104,
+            // CodeSectionStolenData[0x10] @120, EncryptionKeys[4] @136.
+            aes_iv: read_array(data, 104)?,
+            code_section_stolen_data: read_array(data, 120)?,
             encryption_keys: [
-                rd_u32(data, 152)?,
-                rd_u32(data, 156)?,
-                rd_u32(data, 160)?,
-                rd_u32(data, 164)?,
+                rd_u32(data, 136)?,
+                rd_u32(data, 140)?,
+                rd_u32(data, 144)?,
+                rd_u32(data, 148)?,
             ],
-            has_tls_callback: rd_u32(data, 168)?,
+            has_tls_callback: rd_u32(data, 152)?,
         },
         Variant::V31 => Var3xHeader {
             xor_key: rd_u32(data, 0)?,
@@ -131,13 +133,15 @@ fn parse_header(data: &[u8], variant: Variant) -> Result<Var3xHeader> {
             code_section_virtual_address: rd_u64(data, 72)?,
             code_section_raw_size: rd_u64(data, 80)?,
             aes_key: read_array(data, 88)?,
-            aes_iv: read_array(data, 168)?,
-            code_section_stolen_data: read_array(data, 184)?,
+            // SteamStub32Var31Header: AES_Key[0x20] @88, AES_IV[0x10] @120,
+            // CodeSectionStolenData[0x10] @136, EncryptionKeys[4] @152.
+            aes_iv: read_array(data, 120)?,
+            code_section_stolen_data: read_array(data, 136)?,
             encryption_keys: [
-                rd_u32(data, 200)?,
-                rd_u32(data, 204)?,
-                rd_u32(data, 208)?,
-                rd_u32(data, 212)?,
+                rd_u32(data, 152)?,
+                rd_u32(data, 156)?,
+                rd_u32(data, 160)?,
+                rd_u32(data, 164)?,
             ],
             has_tls_callback: 0,
         },
@@ -290,9 +294,12 @@ pub(crate) fn step1(pe: &mut PeFile, variant: Variant, is64: bool) -> Result<Sta
         pe.get_file_offset_from_rva(pe.get_rva_from_va(first_callback)),
     )?;
 
-    // The v3.1 (and v3.0 x64) TLS paths require a matching signature; the
-    // original v3.0 x86 plugin accepts the TLS location unconditionally.
-    if (variant == Variant::V31 || is64) && header.signature != expected {
+    // The v3.1 (and v3.0 x64) TLS paths require a matching signature. The
+    // original v3.0 x86 plugin instead accepts the TLS location regardless, and
+    // only *uses* it as the OEP when the signature did not match there.
+    let signature_matches = header.signature == expected;
+
+    if !(variant == Variant::V30 && !is64) && !signature_matches {
         return Err(Error::Unpack("header signature mismatch".into()));
     }
 
@@ -304,10 +311,18 @@ pub(crate) fn step1(pe: &mut PeFile, variant: Variant, is64: bool) -> Result<Sta
         tls_oep_override = rebuild_tls_callback_information(pe, &header)?;
     }
 
+    // v3.0 x86 only treats the TLS callback as the OEP when the signature did
+    // not match at that location; every other case uses it as the real OEP.
+    let tls_as_oep = if variant == Variant::V30 && !is64 {
+        !signature_matches
+    } else {
+        true
+    };
+
     Ok(State {
         header,
         xor_key,
-        tls_as_oep: true,
+        tls_as_oep,
         tls_oep_rva,
         tls_oep_override,
         code_index: None,
@@ -386,7 +401,7 @@ fn rebuild_tls_callback_information(pe: &mut PeFile, header: &Var3xHeader) -> Re
         .wrapping_add(pe.optional.address_of_entry_point as u64)
         .wrapping_add(key);
 
-    Ok((off - pe.optional.image_base) as u32)
+    Ok(off.wrapping_sub(pe.optional.image_base) as u32)
 }
 
 /// Step 2 - Read, decode and process the payload data.
@@ -619,10 +634,40 @@ mod tests {
         h[44..48].copy_from_slice(&0u32.to_le_bytes()); // drmp size
         h[52..56].copy_from_slice(&0u32.to_le_bytes()); // flags
         h[64..68].copy_from_slice(&0x1000u32.to_le_bytes()); // code section va
+                                                             // C# SteamStub32Var30Header on-disk layout (all fields are naturally
+                                                             // aligned, so these are the exact byte offsets):
+                                                             //   AES_Key[0x20] @72, AES_IV[0x10] @104,
+                                                             //   CodeSectionStolenData[0x10] @120, EncryptionKeys[4] @136,
+                                                             //   HasTlsCallback @152.
         h[72..104].fill(0x01); // aes key
-        h[120..136].fill(0x02); // aes iv
-        h[136..152].fill(0x03); // stolen
-        h[152..168].fill(0x04); // encryption keys
+        h[104..120].fill(0x02); // aes iv
+        h[120..136].fill(0x03); // stolen
+        h[136..152].fill(0x04); // encryption keys
+        h[152..156].copy_from_slice(&1u32.to_le_bytes()); // has tls callback
+        h
+    }
+
+    fn build_v31_header() -> Vec<u8> {
+        let mut h = vec![0u8; 0xF0];
+        h[0..4].copy_from_slice(&0x5566_7788u32.to_le_bytes()); // xor key
+        h[4..8].copy_from_slice(&0xC0DEC0DFu32.to_le_bytes()); // signature
+        h[8..16].copy_from_slice(&0x140000000u64.to_le_bytes()); // image base
+        h[16..24].copy_from_slice(&0x2000u64.to_le_bytes()); // AEP
+        h[24..28].copy_from_slice(&0x1000u32.to_le_bytes()); // bind section offset
+        h[32..40].copy_from_slice(&0x2345u64.to_le_bytes()); // OEP
+        h[44..48].copy_from_slice(&0x100u32.to_le_bytes()); // payload size
+        h[48..52].copy_from_slice(&0x800u32.to_le_bytes()); // drmp offset
+        h[52..56].copy_from_slice(&0x200u32.to_le_bytes()); // drmp size
+        h[60..64].copy_from_slice(&0x04u32.to_le_bytes()); // flags
+        h[72..80].copy_from_slice(&0x3000u64.to_le_bytes()); // code section va
+        h[80..88].copy_from_slice(&0x500u64.to_le_bytes()); // code section raw size
+                                                            // C# SteamStub32Var31Header on-disk layout:
+                                                            //   AES_Key[0x20] @88, AES_IV[0x10] @120,
+                                                            //   CodeSectionStolenData[0x10] @136, EncryptionKeys[4] @152.
+        h[88..120].fill(0x11); // aes key
+        h[120..136].fill(0x22); // aes iv
+        h[136..152].fill(0x33); // stolen
+        h[152..168].fill(0x44); // encryption keys
         h
     }
 
@@ -633,7 +678,29 @@ mod tests {
         assert_eq!(h.code_section_virtual_address, 0x1000);
         assert_eq!(h.original_entry_point, 0x1234);
         assert_eq!(h.aes_key, [0x01; 32]);
+        // Distinct markers per field: a wrong offset cannot accidentally pass.
+        assert_eq!(h.aes_iv, [0x02; 16]);
+        assert_eq!(h.code_section_stolen_data, [0x03; 16]);
         assert_eq!(h.encryption_keys, [0x0404_0404; 4]);
+        assert_eq!(h.has_tls_callback, 1);
+    }
+
+    #[test]
+    fn parses_v31_header() {
+        let h = parse_header(&build_v31_header(), Variant::V31).unwrap();
+        assert_eq!(h.signature, 0xC0DEC0DF);
+        assert_eq!(h.bind_section_offset, 0x1000);
+        assert_eq!(h.original_entry_point, 0x2345);
+        assert_eq!(h.payload_size, 0x100);
+        assert_eq!(h.drmp_dll_offset, 0x800);
+        assert_eq!(h.drmp_dll_size, 0x200);
+        assert_eq!(h.flags, 0x04);
+        assert_eq!(h.code_section_virtual_address, 0x3000);
+        assert_eq!(h.code_section_raw_size, 0x500);
+        assert_eq!(h.aes_key, [0x11; 32]);
+        assert_eq!(h.aes_iv, [0x22; 16]);
+        assert_eq!(h.code_section_stolen_data, [0x33; 16]);
+        assert_eq!(h.encryption_keys, [0x4444_4444; 4]);
     }
 
     #[test]
